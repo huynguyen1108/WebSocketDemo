@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.WSChat" parent="android:Theme.Material.Light.NoActionBar" />
+
+    <!-- Theme cho StockXmlActivity — dùng Material3 để có MaterialToolbar, TextInputLayout, CardView đúng style -->
+    <style name="Theme.WSChat.StockXml" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/stock_up</item>
+    </style>
+</resources>

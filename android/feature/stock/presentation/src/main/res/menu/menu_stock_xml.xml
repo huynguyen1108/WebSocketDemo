@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <item
+        android:id="@+id/action_connect"
+        android:icon="@drawable/ic_stock_wifi"
+        android:title="Kết nối"
+        android:visible="true"
+        app:showAsAction="always" />
+
+    <item
+        android:id="@+id/action_disconnect"
+        android:icon="@drawable/ic_stock_wifi_off"
+        android:title="Ngắt kết nối"
+        android:visible="false"
+        app:showAsAction="always" />
+
+</menu>

@@ -1,0 +1,25 @@
+# ── Android ───────────────────────────────────────────────────────────────────
+android/.gradle/
+android/local.properties
+android/**/build/
+android/**/*.iml
+android/.idea/
+android/captures/
+android/.externalNativeBuild/
+android/.cxx/
+android/keystore/
+*.jks
+*.keystore
+
+# ── Go server ─────────────────────────────────────────────────────────────────
+server/server
+server/*.exe
+server/vendor/
+
+# ── Claude Code ───────────────────────────────────────────────────────────────
+.claude/
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
