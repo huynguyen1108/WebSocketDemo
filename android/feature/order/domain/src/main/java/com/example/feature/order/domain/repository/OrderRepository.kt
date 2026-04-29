@@ -1,7 +1,7 @@
 package com.example.feature.order.domain.repository
 
 import com.example.core.common.AppResult
-import com.example.feature.chat.domain.model.ConnectionState
+import com.example.core.common.ConnectionState
 import com.example.feature.order.domain.model.Order
 import com.example.feature.order.domain.model.OrderSide
 import com.example.feature.order.domain.model.OrderType

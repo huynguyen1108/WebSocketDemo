@@ -8,6 +8,5 @@ android {
 
 dependencies {
     implementation(project(":feature:order:domain"))
-    implementation(project(":feature:chat:domain")) // ConnectionState
     implementation(libs.androidx.material.icons.extended)
 }

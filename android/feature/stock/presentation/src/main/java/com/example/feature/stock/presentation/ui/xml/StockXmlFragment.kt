@@ -16,7 +16,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.recyclerview.widget.ConcatAdapter
 import androidx.recyclerview.widget.LinearLayoutManager
-import com.example.feature.chat.domain.model.ConnectionState
+import com.example.core.common.ConnectionState
 import com.example.feature.stock.presentation.StockUiState
 import com.example.feature.stock.presentation.StockViewModel
 import com.example.feature.stock.presentation.R

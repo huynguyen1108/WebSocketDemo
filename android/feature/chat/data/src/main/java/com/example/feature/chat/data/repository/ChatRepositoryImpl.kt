@@ -3,7 +3,7 @@ package com.example.feature.chat.data.repository
 import com.example.core.common.AppResult
 import com.example.feature.chat.data.datasource.ChatWebSocketDataSource
 import com.example.feature.chat.domain.model.ChatMessage
-import com.example.feature.chat.domain.model.ConnectionState
+import com.example.core.common.ConnectionState
 import com.example.feature.chat.domain.repository.ChatRepository
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow

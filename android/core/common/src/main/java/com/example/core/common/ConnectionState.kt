@@ -1,4 +1,4 @@
-package com.example.feature.chat.domain.model
+package com.example.core.common
 
 sealed class ConnectionState {
     data object Idle : ConnectionState()

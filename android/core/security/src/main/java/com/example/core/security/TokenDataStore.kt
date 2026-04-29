@@ -55,20 +55,27 @@ class TokenDataStore @Inject constructor(
         scope = scope,
     )
 
-    @Volatile private var cached = SessionData()
+    @Volatile private var cached: SessionData? = null
+    private val lock = Any()
 
     init {
-        runBlocking { cached = ds.data.first() }
+        // Pre-warm in background so sync getters typically hit the cache.
+        scope.launch { ensureLoaded() }
     }
 
-    override fun getToken(): String? = cached.token.takeIf { it.isNotEmpty() }
-    override fun getUserId(): String? = cached.userId.takeIf { it.isNotEmpty() }
-    override fun getServerUrl(): String? = cached.serverUrl.takeIf { it.isNotEmpty() }
-    override fun hasSession(): Boolean = cached.token.isNotEmpty()
+    private fun ensureLoaded(): SessionData = cached ?: synchronized(lock) {
+        cached ?: runBlocking { ds.data.first() }.also { cached = it }
+    }
+
+    override fun getToken(): String? = ensureLoaded().token.takeIf { it.isNotEmpty() }
+    override fun getUserId(): String? = ensureLoaded().userId.takeIf { it.isNotEmpty() }
+    override fun getServerUrl(): String? = ensureLoaded().serverUrl.takeIf { it.isNotEmpty() }
+    override fun hasSession(): Boolean = ensureLoaded().token.isNotEmpty()
 
     override fun saveSession(token: String, userId: String, serverUrl: String) {
-        cached = SessionData(token, userId, serverUrl)
-        scope.launch { ds.updateData { SessionData(token, userId, serverUrl) } }
+        val updated = SessionData(token, userId, serverUrl)
+        cached = updated
+        scope.launch { ds.updateData { updated } }
     }
 
     override fun clearSession() {

@@ -7,7 +7,7 @@ import com.example.core.network.monitor.NetworkMonitor
 import com.example.core.network.websocket.WebSocketClient
 import com.example.core.network.websocket.WebSocketEvent
 import com.example.core.security.TokenStore
-import com.example.feature.chat.domain.model.ConnectionState
+import com.example.core.common.ConnectionState
 import com.example.feature.order.data.dto.CancelOrderRequestDto
 import com.example.feature.order.data.dto.OrderRequestDto
 import com.example.feature.order.data.dto.OrderResponseDto
@@ -57,7 +57,6 @@ class OrderWebSocketDataSource @Inject constructor(
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
 
     private val _orders = MutableStateFlow<Map<String, Order>>(emptyMap())
-    val orders: StateFlow<List<Order>> get() = MutableStateFlow(_orders.value.values.toList())
 
     private val _ordersListFlow = MutableStateFlow<List<Order>>(emptyList())
     val ordersListFlow: StateFlow<List<Order>> = _ordersListFlow.asStateFlow()

@@ -1,7 +1,7 @@
 package com.example.feature.chat.presentation
 
 import com.example.feature.chat.domain.model.ChatMessage
-import com.example.feature.chat.domain.model.ConnectionState
+import com.example.core.common.ConnectionState
 
 data class ChatUiState(
     val messages: List<ChatMessage> = emptyList(),

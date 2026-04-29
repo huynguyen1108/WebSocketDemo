@@ -12,6 +12,5 @@ dependencies {
     implementation(project(":core:network"))
     implementation(project(":core:security"))
     implementation(project(":feature:order:domain"))
-    implementation(project(":feature:chat:domain")) // ConnectionState
     implementation(libs.kotlinx.serialization.json)
 }

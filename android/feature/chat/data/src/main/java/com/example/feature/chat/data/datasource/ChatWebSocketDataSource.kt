@@ -10,7 +10,7 @@ import com.example.core.security.authHeaders
 import com.example.feature.chat.data.dto.MessageDto
 import com.example.feature.chat.data.mapper.toDomain
 import com.example.feature.chat.domain.model.ChatMessage
-import com.example.feature.chat.domain.model.ConnectionState
+import com.example.core.common.ConnectionState
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job

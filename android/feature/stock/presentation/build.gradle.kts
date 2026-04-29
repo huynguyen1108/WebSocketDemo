@@ -10,7 +10,6 @@ android {
 dependencies {
     implementation(project(":feature:stock:domain"))
     implementation(project(":feature:auth:domain"))
-    implementation(project(":feature:chat:domain")) // ConnectionState
     implementation(project(":core:security"))
     implementation(libs.androidx.material.icons.extended)
 

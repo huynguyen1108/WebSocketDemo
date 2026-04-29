@@ -1,6 +1,6 @@
 package com.example.feature.stock.domain.usecase
 
-import com.example.feature.chat.domain.model.ConnectionState
+import com.example.core.common.ConnectionState
 import com.example.feature.stock.domain.repository.StockRepository
 import kotlinx.coroutines.flow.StateFlow
 import javax.inject.Inject

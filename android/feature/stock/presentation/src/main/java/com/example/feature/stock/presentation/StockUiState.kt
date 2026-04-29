@@ -1,6 +1,6 @@
 package com.example.feature.stock.presentation
 
-import com.example.feature.chat.domain.model.ConnectionState
+import com.example.core.common.ConnectionState
 import com.example.feature.stock.domain.model.MarketIndex
 import com.example.feature.stock.domain.model.StockItem
 

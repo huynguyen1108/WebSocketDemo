@@ -6,7 +6,7 @@ import com.example.core.network.websocket.WebSocketClient
 import com.example.core.network.websocket.WebSocketEvent
 import com.example.core.security.TokenStore
 import com.example.core.security.authHeaders
-import com.example.feature.chat.domain.model.ConnectionState
+import com.example.core.common.ConnectionState
 import com.example.feature.stock.data.dto.MarketEvent
 import com.example.feature.stock.data.mapper.toDomain
 import com.example.feature.stock.domain.model.MarketIndex
