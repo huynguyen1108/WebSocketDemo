@@ -41,3 +41,8 @@ include(":feature:auth:presentation")
 include(":feature:order:domain")
 include(":feature:order:data")
 include(":feature:order:presentation")
+
+// Feature: Video
+include(":feature:video:domain")
+include(":feature:video:data")
+include(":feature:video:presentation")

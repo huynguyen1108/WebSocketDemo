@@ -12,6 +12,7 @@ import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Receipt
 import androidx.compose.material.icons.filled.TableRows
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -34,6 +35,7 @@ import com.example.feature.auth.presentation.ui.LoginScreen
 import com.example.feature.chat.presentation.ui.ChatScreen
 import com.example.feature.order.presentation.ui.OrderScreen
 import com.example.feature.stock.presentation.ui.StockScreen
+import com.example.feature.video.presentation.ui.VideoScreen
 import com.example.wschat.ui.theme.WSChatTheme
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
@@ -43,8 +45,9 @@ private const val ROUTE_STOCK = "stock"
 private const val ROUTE_CHAT = "chat"
 private const val ROUTE_ORDERS = "orders"
 private const val ROUTE_ORDERS_WITH_SYMBOL = "orders?symbol={symbol}"
+private const val ROUTE_VIDEO = "video"
 
-private val bottomNavRoutes = setOf(ROUTE_STOCK, ROUTE_CHAT, ROUTE_ORDERS)
+private val bottomNavRoutes = setOf(ROUTE_STOCK, ROUTE_CHAT, ROUTE_ORDERS, ROUTE_VIDEO)
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
@@ -84,6 +87,12 @@ class MainActivity : ComponentActivity() {
                                     onClick = { navController.navigate(ROUTE_CHAT) { launchSingleTop = true } },
                                     icon = { Icon(Icons.Default.Chat, null) },
                                     label = { Text("Chat") },
+                                )
+                                NavigationBarItem(
+                                    selected = currentRoute == ROUTE_VIDEO,
+                                    onClick = { navController.navigate(ROUTE_VIDEO) { launchSingleTop = true } },
+                                    icon = { Icon(Icons.Default.Videocam, null) },
+                                    label = { Text("Video") },
                                 )
                                 NavigationBarItem(
                                     selected = false,
@@ -140,6 +149,9 @@ class MainActivity : ComponentActivity() {
                             }
                             composable(ROUTE_CHAT) {
                                 ChatScreen(modifier = Modifier.fillMaxSize())
+                            }
+                            composable(ROUTE_VIDEO) {
+                                VideoScreen(modifier = Modifier.fillMaxSize())
                             }
                         }
                     }

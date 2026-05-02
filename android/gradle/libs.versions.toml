@@ -18,6 +18,7 @@ material = "1.11.0"
 fragment = "1.6.2"
 dataStore = "1.1.1"
 timber = "5.0.1"
+webrtc = "125.6422.06.1"
 retrofit = "2.9.0"
 retrofitKotlinxConverter = "1.0.0"
 
@@ -66,6 +67,7 @@ retrofit-kotlinx-serialization-converter = { group = "com.jakewharton.retrofit",
 
 # Logging
 timber = { group = "com.jakewharton.timber", name = "timber", version.ref = "timber" }
+webrtc-android = { group = "io.github.webrtc-sdk", name = "android", version.ref = "webrtc" }
 
 # Serialization
 kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "serialization" }

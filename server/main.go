@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"time"
 
@@ -138,6 +139,7 @@ func serveStatus(chatHub *Hub, marketHub *MarketHub, w http.ResponseWriter, r *h
 		"status":        "ok",
 		"chatClients":   chatHub.clientCount(),
 		"marketClients": marketHub.clientCount(),
+		"videoRooms":    videoRoomCount(),
 		"time":          time.Now().Format(time.RFC3339),
 	})
 }
@@ -274,16 +276,54 @@ func main() {
 	// Trading WS — JWT required (order placement must be authenticated)
 	mux.HandleFunc("/trading", requireAuth(serveTrading))
 
+	// Video signaling WS — JWT required
+	mux.HandleFunc("/video", requireAuth(serveVideo))
+	mux.HandleFunc("/video-test", serveVideoTest)
+
 	mux.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
 		serveStatus(chatHub, marketHub, w, r)
 	})
 	mux.HandleFunc("/", serveHome)
 
 	addr := ":8080"
-	log.Printf("🚀 Server: http://localhost%s", addr)
-	log.Printf("   Auth   : POST http://localhost%s/api/auth/login", addr)
-	log.Printf("   Market WS: ws://localhost%s/market", addr)
-	log.Printf("   Chat   WS: ws://localhost%s/ws?username=X", addr)
-	log.Printf("   Trading WS: ws://localhost%s/trading  (JWT required)", addr)
+	log.Printf("🚀 Server listening on %s", addr)
+	log.Printf("   Emulator  : ws://10.0.2.2:8080  (Android emulator → host)")
+	if ip := localIP(); ip != "" {
+		log.Printf("   WiFi/LAN  : ws://%s:8080  (real device on same network)", ip)
+	}
+	log.Printf("   Auth      : POST /api/auth/login")
+	log.Printf("   Market  WS: /market")
+	log.Printf("   Chat    WS: /ws?username=X")
+	log.Printf("   Trading WS: /trading  (JWT required)")
+	log.Printf("   Video   WS: /video?room=X  (JWT required)")
+	log.Printf("   Video test: http://localhost:8080/video-test")
 	log.Fatal(http.ListenAndServe(addr, mux))
+}
+
+// localIP returns the LAN IPv4 address (192.168.x.x or 10.x.x.x), skipping
+// loopback and link-local (169.254.x.x) addresses from virtual adapters.
+func localIP() string {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return ""
+	}
+	var fallback string
+	for _, addr := range addrs {
+		ipnet, ok := addr.(*net.IPNet)
+		if !ok {
+			continue
+		}
+		ip4 := ipnet.IP.To4()
+		if ip4 == nil || ip4.IsLoopback() || ip4.IsLinkLocalUnicast() {
+			continue
+		}
+		// Prefer private LAN ranges.
+		if ip4[0] == 192 || ip4[0] == 10 || (ip4[0] == 172 && ip4[1] >= 16 && ip4[1] <= 31) {
+			return ip4.String()
+		}
+		if fallback == "" {
+			fallback = ip4.String()
+		}
+	}
+	return fallback
 }

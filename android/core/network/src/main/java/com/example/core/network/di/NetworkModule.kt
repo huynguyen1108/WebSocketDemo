@@ -48,4 +48,10 @@ object NetworkModule {
     @Named("trading")
     fun provideTradingWebSocketClient(okHttpClient: OkHttpClient): WebSocketClient =
         OkHttpWebSocketClient(okHttpClient)
+
+    @Provides
+    @Singleton
+    @Named("video")
+    fun provideVideoWebSocketClient(okHttpClient: OkHttpClient): WebSocketClient =
+        OkHttpWebSocketClient(okHttpClient)
 }
