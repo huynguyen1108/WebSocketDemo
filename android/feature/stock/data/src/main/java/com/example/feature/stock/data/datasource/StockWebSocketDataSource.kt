@@ -8,6 +8,9 @@ import com.example.core.security.TokenStore
 import com.example.core.security.authHeaders
 import com.example.core.common.ConnectionState
 import com.example.feature.stock.data.dto.MarketEvent
+import com.example.feature.stock.data.dto.MarketIndexDto
+import com.example.feature.stock.data.dto.SnapshotDto
+import com.example.feature.stock.data.dto.StockDto
 import com.example.feature.stock.data.mapper.toDomain
 import com.example.feature.stock.domain.model.MarketIndex
 import com.example.feature.stock.domain.model.StockItem
@@ -73,11 +76,9 @@ class StockWebSocketDataSource @Inject constructor(
     }
 
     fun connect(serverUrl: String) {
-        _connectionState.value = ConnectionState.Connecting
         this.serverUrl = serverUrl
         retryCount = 0
-        startCollecting()
-        wsClient.connect(buildUrl(serverUrl), tokenStore.authHeaders())
+        openConnection()
     }
 
     fun disconnect() {
@@ -85,6 +86,16 @@ class StockWebSocketDataSource @Inject constructor(
         collectJob?.cancel()
         wsClient.disconnect()
         _connectionState.value = ConnectionState.Disconnected
+    }
+
+    private fun openConnection() {
+        _connectionState.value = ConnectionState.Connecting
+        startCollecting()
+        connectWebSocket()
+    }
+
+    private fun connectWebSocket() {
+        wsClient.connect(buildUrl(serverUrl), tokenStore.authHeaders())
     }
 
     private fun startCollecting() {
@@ -111,14 +122,7 @@ class StockWebSocketDataSource @Inject constructor(
     private fun onMessage(raw: String) {
         try {
             when (val event = json.decodeFromString<MarketEvent>(raw)) {
-                is MarketEvent.Snapshot -> {
-                    val map = LinkedHashMap<String, StockItem>()
-                    event.payload.stocks.forEach { dto -> map[dto.symbol] = dto.toDomain() }
-                    _stocksMap.value = map
-                    _stocks.value = map.values.toList()
-                    _indices.value = event.payload.indices.map { it.toDomain() }
-                    Timber.d("Snapshot: %d stocks, %d indices", event.payload.stocks.size, event.payload.indices.size)
-                }
+                is MarketEvent.Snapshot -> applySnapshot(event.payload)
                 is MarketEvent.StockTick -> applyStockTick(event.payload)
                 is MarketEvent.IndexTick -> applyIndexTick(event.payload)
             }
@@ -127,16 +131,23 @@ class StockWebSocketDataSource @Inject constructor(
         }
     }
 
-    private fun applyStockTick(dto: com.example.feature.stock.data.dto.StockDto) {
+    private fun applySnapshot(payload: SnapshotDto) {
+        val map = LinkedHashMap<String, StockItem>()
+        payload.stocks.forEach { dto -> map[dto.symbol] = dto.toDomain() }
+        _stocksMap.value = map
+        _stocks.value = map.values.toList()
+        _indices.value = payload.indices.map { it.toDomain() }
+        Timber.d("Snapshot: %d stocks, %d indices", payload.stocks.size, payload.indices.size)
+    }
+
+    private fun applyStockTick(dto: StockDto) {
         _stocksMap.update { current ->
-            val updated = LinkedHashMap(current)
-            updated[dto.symbol] = dto.toDomain(updated[dto.symbol])
-            updated
+            LinkedHashMap(current).also { it[dto.symbol] = dto.toDomain(it[dto.symbol]) }
         }
         _stocks.value = _stocksMap.value.values.toList()
     }
 
-    private fun applyIndexTick(dto: com.example.feature.stock.data.dto.MarketIndexDto) {
+    private fun applyIndexTick(dto: MarketIndexDto) {
         _indices.update { current ->
             val idx = current.indexOfFirst { it.name == dto.name }
             if (idx >= 0) current.toMutableList().also { it[idx] = dto.toDomain() }
@@ -168,9 +179,7 @@ class StockWebSocketDataSource @Inject constructor(
             val state = _connectionState.value
             if (state !is ConnectionState.Connected && state !is ConnectionState.Connecting) {
                 retryCount = 0
-                startCollecting()
-                _connectionState.value = ConnectionState.Connecting
-                wsClient.connect(buildUrl(serverUrl), tokenStore.authHeaders())
+                openConnection()
             }
         }
     }
@@ -192,7 +201,7 @@ class StockWebSocketDataSource @Inject constructor(
         retryJob = appScope.launch {
             _connectionState.value = ConnectionState.Connecting
             delay(delayMs)
-            wsClient.connect(buildUrl(serverUrl), tokenStore.authHeaders())
+            connectWebSocket()
         }
     }
 
