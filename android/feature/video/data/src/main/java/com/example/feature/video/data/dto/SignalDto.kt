@@ -11,4 +11,7 @@ data class SignalDto(
     val candidate: String? = null,
     val sdpMid: String? = null,
     val sdpMLineIndex: Int? = null,
+    val callerName: String? = null,
+    val calleeName: String? = null,
+    val reason: String? = null,
 )

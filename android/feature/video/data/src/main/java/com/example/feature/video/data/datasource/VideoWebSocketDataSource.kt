@@ -10,6 +10,7 @@ import com.example.feature.video.data.dto.SignalDto
 import com.example.feature.video.data.mapper.toDomain
 import com.example.feature.video.data.mapper.toDto
 import com.example.feature.video.domain.model.SignalMessage
+import com.example.feature.video.domain.repository.CallRole
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.BufferOverflow
@@ -46,14 +47,16 @@ class VideoWebSocketDataSource @Inject constructor(
 
     private var serverUrl = ""
     private var roomId = ""
+    private var role: CallRole = CallRole.CALLER
     private var collectJob: Job? = null
 
-    fun connect(serverUrl: String, roomId: String) {
+    fun connect(serverUrl: String, roomId: String, role: CallRole) {
         _connectionState.value = ConnectionState.Connecting
         this.serverUrl = serverUrl
         this.roomId = roomId
+        this.role = role
         startCollecting()
-        wsClient.connect(buildUrl(serverUrl, roomId), tokenStore.authHeaders())
+        wsClient.connect(buildUrl(serverUrl, roomId, role), tokenStore.authHeaders())
     }
 
     fun disconnect() {
@@ -103,6 +106,8 @@ class VideoWebSocketDataSource @Inject constructor(
         }
     }
 
-    private fun buildUrl(base: String, roomId: String) =
-        base.trimEnd('/') + "/video?room=" + roomId
+    private fun buildUrl(base: String, roomId: String, role: CallRole): String {
+        val roleName = role.name.lowercase()
+        return base.trimEnd('/') + "/video?room=" + roomId + "&role=" + roleName
+    }
 }

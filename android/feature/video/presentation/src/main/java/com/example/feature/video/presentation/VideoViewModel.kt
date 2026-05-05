@@ -7,11 +7,20 @@ import com.example.core.common.ConnectionState
 import com.example.core.security.TokenStore
 import com.example.feature.video.domain.model.SignalMessage
 import com.example.feature.video.domain.model.VideoCallState
-import com.example.feature.video.domain.usecase.JoinRoomUseCase
+import com.example.feature.video.domain.usecase.AcceptCallUseCase
+import com.example.feature.video.domain.usecase.CancelCallUseCase
 import com.example.feature.video.domain.usecase.LeaveRoomUseCase
 import com.example.feature.video.domain.usecase.ObserveConnectionStateUseCase
 import com.example.feature.video.domain.usecase.ObserveSignalsUseCase
+import com.example.feature.video.domain.usecase.RejectCallUseCase
 import com.example.feature.video.domain.usecase.SendSignalUseCase
+import com.example.feature.video.domain.usecase.StartCallUseCase
+import com.example.feature.video.domain.usecase.WaitForCallUseCase
+import com.example.feature.video.presentation.system.CallAudioFocus
+import com.example.feature.video.presentation.system.CallForegroundService
+import com.example.feature.video.presentation.system.CallNotifications
+import com.example.feature.video.presentation.system.ProximityWakeLock
+import com.example.feature.video.presentation.system.RingtonePlayer
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -43,16 +52,23 @@ import javax.inject.Inject
 
 @HiltViewModel
 class VideoViewModel @Inject constructor(
-    private val joinRoomUseCase: JoinRoomUseCase,
+    private val startCallUseCase: StartCallUseCase,
+    private val waitForCallUseCase: WaitForCallUseCase,
+    private val acceptCallUseCase: AcceptCallUseCase,
+    private val rejectCallUseCase: RejectCallUseCase,
+    private val cancelCallUseCase: CancelCallUseCase,
     private val leaveRoomUseCase: LeaveRoomUseCase,
     private val sendSignalUseCase: SendSignalUseCase,
     private val observeSignalsUseCase: ObserveSignalsUseCase,
     private val observeConnectionStateUseCase: ObserveConnectionStateUseCase,
     private val tokenStore: TokenStore,
+    private val ringtonePlayer: RingtonePlayer,
+    private val audioFocus: CallAudioFocus,
+    private val proximityLock: ProximityWakeLock,
+    private val callNotifications: CallNotifications,
     @ApplicationContext private val context: Context,
 ) : ViewModel() {
 
-    // Shared EGL context for all SurfaceViewRenderers and the encoder/decoder factory.
     val eglBase: EglBase = EglBase.create()
 
     private val _uiState = MutableStateFlow(
@@ -75,9 +91,276 @@ class VideoViewModel @Inject constructor(
         initPeerConnectionFactory()
         observeConnectionState()
         observeSignals()
+        observeStateForSystemEffects()
     }
 
-    // ── Factory init ──────────────────────────────────────────────────────────
+    /** Drive ringtone, foreground service, audio focus, proximity lock,
+     *  and notification visibility from the call state — so they're all
+     *  managed in one place rather than scattered across actions. */
+    private fun observeStateForSystemEffects() {
+        var prev: VideoCallState = VideoCallState.Idle
+        uiState.onEach { state ->
+            val cs = state.callState
+            applyEffects(prev = prev, next = cs)
+            prev = cs
+        }.launchIn(viewModelScope)
+    }
+
+    private fun applyEffects(prev: VideoCallState, next: VideoCallState) {
+        // ── Ringtone: only during Incoming ─────────────────────────────────
+        val wasIncoming = prev is VideoCallState.Incoming
+        val isIncoming  = next is VideoCallState.Incoming
+        if (isIncoming && !wasIncoming) ringtonePlayer.start()
+        if (wasIncoming && !isIncoming) ringtonePlayer.stop()
+
+        // ── Incoming notification (full-screen intent) ─────────────────────
+        if (isIncoming && !wasIncoming) {
+            val name = (next as VideoCallState.Incoming).callerName
+            callNotifications.showIncoming(CallNotifications.NOTIF_ID_INCOMING, name)
+        }
+        if (wasIncoming && !isIncoming) {
+            callNotifications.cancel(CallNotifications.NOTIF_ID_INCOMING)
+        }
+
+        // ── Foreground service: keep process alive during the whole call ─
+        val wasActiveCall = prev.isCallActive
+        val isActiveCall  = next.isCallActive
+        if (isActiveCall && !wasActiveCall) {
+            CallForegroundService.start(context, foregroundLabel(next))
+        } else if (!isActiveCall && wasActiveCall) {
+            CallForegroundService.stop(context)
+        }
+
+        // ── Audio focus + proximity lock: only during InCall ──────────────
+        val wasInCall = prev is VideoCallState.InCall
+        val isInCall  = next is VideoCallState.InCall
+        if (isInCall && !wasInCall) {
+            audioFocus.acquire()
+            proximityLock.acquire()
+        }
+        if (wasInCall && !isInCall) {
+            audioFocus.release()
+            proximityLock.release()
+        }
+    }
+
+    /** The call is "active" (and the foreground service should run) for any
+     *  non-Idle, non-terminal state. */
+    private val VideoCallState.isCallActive: Boolean
+        get() = when (this) {
+            VideoCallState.Idle,
+            is VideoCallState.Rejected,
+            VideoCallState.Cancelled,
+            VideoCallState.NoAnswer,
+            is VideoCallState.Busy,
+            is VideoCallState.Error -> false
+            else -> true
+        }
+
+    private fun foregroundLabel(state: VideoCallState): String = when (state) {
+        VideoCallState.Connecting -> "Đang kết nối"
+        VideoCallState.WaitingForCallee -> "Đang chờ người nghe"
+        is VideoCallState.Calling -> "Đang gọi ${state.calleeName}"
+        is VideoCallState.Incoming -> "Cuộc gọi đến từ ${state.callerName}"
+        is VideoCallState.PeerReady -> "Đang thiết lập"
+        VideoCallState.InCall -> "Đang trong cuộc gọi"
+        else -> "Cuộc gọi"
+    }
+
+    // ── Public actions ────────────────────────────────────────────────────────
+
+    fun onServerUrlChange(url: String) = _uiState.update { it.copy(serverUrl = url) }
+    fun onRoomIdChange(id: String) = _uiState.update { it.copy(roomId = id) }
+
+    /** Caller — connect and wait for the callee to join. Camera starts immediately
+     *  so the offer can include tracks once the callee accepts. */
+    fun startCall() {
+        val state = _uiState.value
+        if (state.roomId.isBlank()) return
+        _uiState.update { it.copy(signalLog = emptyList()) }
+        viewModelScope.launch(Dispatchers.Main) {
+            startCameraAndMic()
+            startCallUseCase(state.serverUrl, state.roomId.trim())
+        }
+    }
+
+    /** Callee — connect and wait for an "incoming" signal. Camera deferred until accept. */
+    fun waitForCall() {
+        val state = _uiState.value
+        if (state.roomId.isBlank()) return
+        _uiState.update { it.copy(signalLog = emptyList()) }
+        waitForCallUseCase(state.serverUrl, state.roomId.trim())
+    }
+
+    /** Callee accepts — start camera, send Accept, wait for "join" from server. */
+    fun acceptCall() {
+        viewModelScope.launch(Dispatchers.Main) {
+            startCameraAndMic()
+            acceptCallUseCase()
+            log("→ accept sent")
+        }
+    }
+
+    /** Callee rejects — send Reject and disconnect. */
+    fun rejectCall(reason: String? = null) {
+        viewModelScope.launch {
+            rejectCallUseCase(reason)
+            log("→ reject sent")
+            _uiState.update { it.copy(callState = VideoCallState.Idle) }
+            leaveRoomUseCase()
+        }
+    }
+
+    /** Caller cancels before callee answers. */
+    fun cancelCall() {
+        viewModelScope.launch {
+            cancelCallUseCase()
+            log("→ cancel sent")
+            closePeerConnection()
+            _uiState.update { it.copy(callState = VideoCallState.Idle) }
+            leaveRoomUseCase()
+        }
+    }
+
+    /** End an in-progress call. */
+    fun leave() {
+        viewModelScope.launch { sendSignalUseCase(SignalMessage.Leave) }
+        closePeerConnection()
+        leaveRoomUseCase()
+        _uiState.update { it.copy(callState = VideoCallState.Idle) }
+    }
+
+    /** Reset terminal states (Rejected / Cancelled / NoAnswer / Busy / Error) back to Idle. */
+    fun dismiss() {
+        closePeerConnection()
+        _uiState.update { it.copy(callState = VideoCallState.Idle) }
+    }
+
+    // ── State observation ─────────────────────────────────────────────────────
+
+    private fun observeConnectionState() {
+        observeConnectionStateUseCase()
+            .onEach { connState ->
+                _uiState.update { current ->
+                    val next = mapConnection(connState, current.callState)
+                    if (next == current.callState) current else current.copy(callState = next)
+                }
+            }
+            .launchIn(viewModelScope)
+    }
+
+    private fun mapConnection(connState: ConnectionState, current: VideoCallState): VideoCallState =
+        when (connState) {
+            is ConnectionState.Connecting -> VideoCallState.Connecting
+            is ConnectionState.Connected -> {
+                // Promote Connecting → role-specific waiting state. The first
+                // server signal (incoming / ringing / rejected) will refine it.
+                if (current is VideoCallState.Connecting) VideoCallState.WaitingForCallee
+                else current
+            }
+            is ConnectionState.Error -> VideoCallState.Error(connState.message)
+            else -> if (current.isTerminal) current else VideoCallState.Idle
+        }
+
+    private val VideoCallState.isTerminal: Boolean
+        get() = this is VideoCallState.Rejected ||
+            this is VideoCallState.Cancelled ||
+            this is VideoCallState.NoAnswer ||
+            this is VideoCallState.Busy ||
+            this is VideoCallState.Error
+
+    private fun observeSignals() {
+        observeSignalsUseCase()
+            .onEach { handleSignal(it) }
+            .launchIn(viewModelScope)
+    }
+
+    // ── Signal handling ───────────────────────────────────────────────────────
+
+    private fun handleSignal(signal: SignalMessage) {
+        log(
+            when (signal) {
+                is SignalMessage.Incoming -> "← incoming from ${signal.callerName}"
+                is SignalMessage.Ringing -> "← ringing ${signal.calleeName}"
+                is SignalMessage.Join -> "← join peer=${signal.username} initiator=${signal.initiator}"
+                is SignalMessage.Offer -> "← offer"
+                is SignalMessage.Answer -> "← answer"
+                is SignalMessage.IceCandidate -> "← ice"
+                is SignalMessage.Rejected -> "← rejected (${signal.reason ?: "-"})"
+                SignalMessage.Cancelled -> "← cancelled"
+                SignalMessage.Timeout -> "← timeout"
+                is SignalMessage.Busy -> "← busy (${signal.reason ?: "-"})"
+                SignalMessage.Leave -> "← leave"
+                SignalMessage.Accept, is SignalMessage.Reject, SignalMessage.Cancel -> ""
+            },
+        )
+
+        when (signal) {
+            is SignalMessage.Incoming ->
+                _uiState.update { it.copy(callState = VideoCallState.Incoming(signal.callerName)) }
+
+            is SignalMessage.Ringing ->
+                _uiState.update { it.copy(callState = VideoCallState.Calling(signal.calleeName)) }
+
+            is SignalMessage.Join -> {
+                _uiState.update {
+                    it.copy(callState = VideoCallState.PeerReady(signal.username, signal.initiator))
+                }
+                viewModelScope.launch(Dispatchers.Main) {
+                    setupPeerConnection(initiator = signal.initiator)
+                }
+            }
+
+            is SignalMessage.Offer -> viewModelScope.launch(Dispatchers.Main) {
+                val pc = peerConnection ?: return@launch
+                pc.setRemoteDescription(
+                    SimpleSdpObserver(),
+                    SessionDescription(SessionDescription.Type.OFFER, signal.sdp),
+                )
+                createAndSendAnswer(pc)
+            }
+
+            is SignalMessage.Answer -> viewModelScope.launch(Dispatchers.Main) {
+                peerConnection?.setRemoteDescription(
+                    SimpleSdpObserver(),
+                    SessionDescription(SessionDescription.Type.ANSWER, signal.sdp),
+                )
+            }
+
+            is SignalMessage.IceCandidate -> peerConnection?.addIceCandidate(
+                IceCandidate(signal.sdpMid ?: "", signal.sdpMLineIndex ?: 0, signal.candidate),
+            )
+
+            is SignalMessage.Rejected -> {
+                _uiState.update { it.copy(callState = VideoCallState.Rejected(signal.reason)) }
+                closePeerConnection()
+            }
+
+            SignalMessage.Cancelled -> {
+                _uiState.update { it.copy(callState = VideoCallState.Cancelled) }
+                closePeerConnection()
+            }
+
+            SignalMessage.Timeout -> {
+                _uiState.update { it.copy(callState = VideoCallState.NoAnswer) }
+                closePeerConnection()
+            }
+
+            is SignalMessage.Busy ->
+                _uiState.update { it.copy(callState = VideoCallState.Busy(signal.reason)) }
+
+            SignalMessage.Leave -> {
+                closePeerConnection()
+                _uiState.update { it.copy(callState = VideoCallState.Idle) }
+                leaveRoomUseCase()
+            }
+
+            // Outbound-only — never received from server.
+            SignalMessage.Accept, is SignalMessage.Reject, SignalMessage.Cancel -> Unit
+        }
+    }
+
+    // ── PeerConnectionFactory ─────────────────────────────────────────────────
 
     private fun initPeerConnectionFactory() {
         PeerConnectionFactory.initialize(
@@ -90,99 +373,10 @@ class VideoViewModel @Inject constructor(
             .createPeerConnectionFactory()
     }
 
-    // ── State observation ─────────────────────────────────────────────────────
-
-    private fun observeConnectionState() {
-        observeConnectionStateUseCase()
-            .onEach { connState ->
-                val callState = when (connState) {
-                    is ConnectionState.Connecting -> VideoCallState.Connecting
-                    is ConnectionState.Connected -> {
-                        if (_uiState.value.callState is VideoCallState.Connecting) VideoCallState.WaitingForPeer
-                        else _uiState.value.callState
-                    }
-                    is ConnectionState.Error -> VideoCallState.Error(connState.message)
-                    else -> VideoCallState.Idle
-                }
-                _uiState.update { it.copy(callState = callState) }
-            }
-            .launchIn(viewModelScope)
-    }
-
-    private fun observeSignals() {
-        observeSignalsUseCase()
-            .onEach { handleSignal(it) }
-            .launchIn(viewModelScope)
-    }
-
-    // ── Public actions ────────────────────────────────────────────────────────
-
-    fun onServerUrlChange(url: String) = _uiState.update { it.copy(serverUrl = url) }
-    fun onRoomIdChange(id: String) = _uiState.update { it.copy(roomId = id) }
-
-    fun join() {
-        val state = _uiState.value
-        if (state.roomId.isBlank()) return
-        _uiState.update { it.copy(signalLog = emptyList()) }
-        joinRoomUseCase(state.serverUrl, state.roomId.trim())
-    }
-
-    fun leave() {
-        leaveRoomUseCase()
-        closePeerConnection()
-        _uiState.update { it.copy(callState = VideoCallState.Idle) }
-    }
-
-    // ── Signal handling ───────────────────────────────────────────────────────
-
-    private fun handleSignal(signal: SignalMessage) {
-        log(
-            when (signal) {
-                is SignalMessage.Join -> "← join  peer=${signal.username}  initiator=${signal.initiator}"
-                is SignalMessage.Offer -> "← offer"
-                is SignalMessage.Answer -> "← answer"
-                is SignalMessage.IceCandidate -> "← ice"
-                SignalMessage.Leave -> "← leave"
-                SignalMessage.Busy -> "← busy"
-            },
-        )
-
-        when (signal) {
-            is SignalMessage.Join -> {
-                _uiState.update { it.copy(callState = VideoCallState.PeerReady(signal.username, signal.initiator)) }
-                viewModelScope.launch(Dispatchers.Main) {
-                    startCameraAndMic()
-                    setupPeerConnection(initiator = signal.initiator)
-                }
-            }
-            is SignalMessage.Offer -> viewModelScope.launch(Dispatchers.Main) {
-                val pc = peerConnection ?: return@launch
-                pc.setRemoteDescription(
-                    SimpleSdpObserver(),
-                    SessionDescription(SessionDescription.Type.OFFER, signal.sdp),
-                )
-                createAndSendAnswer(pc)
-            }
-            is SignalMessage.Answer -> viewModelScope.launch(Dispatchers.Main) {
-                peerConnection?.setRemoteDescription(
-                    SimpleSdpObserver(),
-                    SessionDescription(SessionDescription.Type.ANSWER, signal.sdp),
-                )
-            }
-            is SignalMessage.IceCandidate -> peerConnection?.addIceCandidate(
-                IceCandidate(signal.sdpMid ?: "", signal.sdpMLineIndex ?: 0, signal.candidate),
-            )
-            SignalMessage.Leave -> {
-                closePeerConnection()
-                _uiState.update { it.copy(callState = VideoCallState.WaitingForPeer) }
-            }
-            SignalMessage.Busy -> _uiState.update { it.copy(callState = VideoCallState.Busy) }
-        }
-    }
-
     // ── Camera / mic ──────────────────────────────────────────────────────────
 
     private fun startCameraAndMic() {
+        if (_localVideoTrack.value != null) return // already running
         val factory = peerConnectionFactory ?: return
         val enumerator = Camera2Enumerator(context)
         val cameraName = enumerator.deviceNames.firstOrNull { enumerator.isFrontFacing(it) }
@@ -206,10 +400,7 @@ class VideoViewModel @Inject constructor(
             PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer(),
             PeerConnection.IceServer.builder("stun:stun.relay.metered.ca:80").createIceServer(),
         )
-
-        val turnUsername = TURN_USERNAME
-        val turnPassword = TURN_PASSWORD
-        if (turnUsername.isNotEmpty()) {
+        if (TURN_USERNAME.isNotEmpty()) {
             servers += PeerConnection.IceServer.builder(
                 listOf(
                     "turn:$TURN_HOST:80",
@@ -217,9 +408,8 @@ class VideoViewModel @Inject constructor(
                     "turn:$TURN_HOST:443",
                     "turns:$TURN_HOST:443?transport=tcp",
                 ),
-            ).setUsername(turnUsername).setPassword(turnPassword).createIceServer()
+            ).setUsername(TURN_USERNAME).setPassword(TURN_PASSWORD).createIceServer()
         }
-
         return servers
     }
 
@@ -231,8 +421,7 @@ class VideoViewModel @Inject constructor(
 
     private fun setupPeerConnection(initiator: Boolean) {
         val factory = peerConnectionFactory ?: return
-        val iceServers = buildIceServers()
-        val config = PeerConnection.RTCConfiguration(iceServers).apply {
+        val config = PeerConnection.RTCConfiguration(buildIceServers()).apply {
             sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
         }
         val pc = factory.createPeerConnection(config, pcObserver) ?: return
@@ -344,7 +533,10 @@ class VideoViewModel @Inject constructor(
         leaveRoomUseCase()
     }
 
-    private fun log(msg: String) = _uiState.update { it.copy(signalLog = it.signalLog + msg) }
+    private fun log(msg: String) {
+        if (msg.isEmpty()) return
+        _uiState.update { it.copy(signalLog = it.signalLog + msg) }
+    }
 }
 
 private open class SimpleSdpObserver : SdpObserver {

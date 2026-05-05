@@ -13,20 +13,29 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.CallEnd
+import androidx.compose.material.icons.filled.HourglassTop
+import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -73,7 +82,6 @@ fun VideoScreen(
     val context = LocalContext.current
     val logListState = rememberLazyListState()
 
-    // Create renderers once; init EGL context inside factory so it's ready immediately.
     val localRenderer = remember {
         SurfaceViewRenderer(context).apply {
             init(viewModel.eglBase.eglBaseContext, null)
@@ -81,48 +89,48 @@ fun VideoScreen(
         }
     }
     val remoteRenderer = remember {
-        SurfaceViewRenderer(context).apply {
-            init(viewModel.eglBase.eglBaseContext, null)
-        }
+        SurfaceViewRenderer(context).apply { init(viewModel.eglBase.eglBaseContext, null) }
     }
 
-    // Release renderers when screen is disposed.
     DisposableEffect(Unit) {
         onDispose {
             localRenderer.release()
             remoteRenderer.release()
         }
     }
-
-    // Attach / detach local video sink whenever the track changes.
     DisposableEffect(localTrack) {
         localTrack?.addSink(localRenderer)
         onDispose { localTrack?.removeSink(localRenderer) }
     }
-
-    // Attach / detach remote video sink whenever the track changes.
     DisposableEffect(remoteTrack) {
         remoteTrack?.addSink(remoteRenderer)
         onDispose { remoteTrack?.removeSink(remoteRenderer) }
     }
 
-    // Auto-scroll signal log to bottom.
     LaunchedEffect(state.signalLog.size) {
         if (state.signalLog.isNotEmpty()) logListState.animateScrollToItem(state.signalLog.lastIndex)
     }
 
-    // Permission launcher — calls viewModel.join() after permissions are granted.
-    val permissionLauncher = rememberLauncherForActivityResult(
+    // Permission launchers — caller and callee both need camera+mic, but at
+    // different moments (caller: at "Start Call", callee: at "Accept").
+    val callerPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
-    ) { granted ->
-        if (granted.values.all { it }) viewModel.join()
+    ) { granted -> if (granted.values.all { it }) viewModel.startCall() }
+
+    val acceptPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) { granted -> if (granted.values.all { it }) viewModel.acceptCall() }
+
+    fun hasPerms(): Boolean = REQUIRED_PERMISSIONS.all {
+        ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
     }
 
-    fun requestJoin() {
-        val allGranted = REQUIRED_PERMISSIONS.all {
-            ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
-        }
-        if (allGranted) viewModel.join() else permissionLauncher.launch(REQUIRED_PERMISSIONS)
+    fun requestStartCall() {
+        if (hasPerms()) viewModel.startCall() else callerPermissionLauncher.launch(REQUIRED_PERMISSIONS)
+    }
+
+    fun requestAccept() {
+        if (hasPerms()) viewModel.acceptCall() else acceptPermissionLauncher.launch(REQUIRED_PERMISSIONS)
     }
 
     Scaffold(
@@ -148,109 +156,86 @@ fun VideoScreen(
 
             // ── Video panes ──────────────────────────────────────────────────
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                VideoPane(
-                    label = "Local",
-                    track = localTrack,
-                    renderer = localRenderer,
-                    modifier = Modifier.weight(1f),
-                )
-                VideoPane(
-                    label = "Remote",
-                    track = remoteTrack,
-                    renderer = remoteRenderer,
-                    modifier = Modifier.weight(1f),
-                )
+                VideoPane("Local", localTrack, localRenderer, modifier = Modifier.weight(1f))
+                VideoPane("Remote", remoteTrack, remoteRenderer, modifier = Modifier.weight(1f))
             }
 
-            // ── Connect panel (Idle / Error / Busy) ──────────────────────────
-            if (state.callState is VideoCallState.Idle ||
-                state.callState is VideoCallState.Error ||
-                state.callState is VideoCallState.Busy
-            ) {
-                Surface(tonalElevation = 2.dp, shape = MaterialTheme.shapes.medium) {
-                    Column(
-                        modifier = Modifier.fillMaxWidth().padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        if (state.callState is VideoCallState.Error) {
-                            Text(
-                                "⚠ ${(state.callState as VideoCallState.Error).message}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = ColorRed,
-                            )
-                        }
-                        if (state.callState is VideoCallState.Busy) {
-                            Text(
-                                "Room is full (max 2 peers)",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = ColorRed,
-                            )
-                        }
-                        OutlinedTextField(
-                            value = state.serverUrl,
-                            onValueChange = viewModel::onServerUrlChange,
-                            label = { Text("Server URL") },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                        OutlinedTextField(
-                            value = state.roomId,
-                            onValueChange = viewModel::onRoomIdChange,
-                            label = { Text("Room ID") },
-                            placeholder = { Text("e.g. room1") },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                        Button(
-                            onClick = { requestJoin() },
-                            enabled = state.roomId.isNotBlank(),
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Icon(Icons.Default.Videocam, null)
-                            Spacer(Modifier.width(8.dp))
-                            Text("Join Room")
-                        }
-                    }
-                }
-            }
-
-            // ── In-call controls (Connecting / Waiting / PeerReady / InCall) ─
-            if (state.callState !is VideoCallState.Idle &&
-                state.callState !is VideoCallState.Error &&
-                state.callState !is VideoCallState.Busy
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    when (state.callState) {
-                        is VideoCallState.Connecting,
-                        is VideoCallState.WaitingForPeer ->
-                            CircularProgressIndicator(strokeWidth = 2.dp)
-                        else -> {}
-                    }
-                    Text(
-                        text = when (val cs = state.callState) {
-                            is VideoCallState.Connecting -> "Connecting…"
-                            is VideoCallState.WaitingForPeer -> "Waiting for peer in \"${state.roomId}\"…"
-                            is VideoCallState.PeerReady ->
-                                "${cs.peerName} • ${if (cs.initiator) "Sending offer…" else "Waiting for offer…"}"
-                            is VideoCallState.InCall -> "In call"
-                            else -> ""
-                        },
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = if (state.callState is VideoCallState.InCall) ColorGreen else MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.weight(1f),
+            // ── State-driven controls ────────────────────────────────────────
+            when (val cs = state.callState) {
+                VideoCallState.Idle ->
+                    IdlePanel(
+                        serverUrl = state.serverUrl,
+                        roomId = state.roomId,
+                        onUrlChange = viewModel::onServerUrlChange,
+                        onRoomChange = viewModel::onRoomIdChange,
+                        onStartCall = ::requestStartCall,
+                        onWaitForCall = viewModel::waitForCall,
                     )
-                    Button(
-                        onClick = viewModel::leave,
-                        colors = ButtonDefaults.buttonColors(containerColor = ColorRed),
-                    ) {
-                        Icon(Icons.Default.CallEnd, null)
-                        Spacer(Modifier.width(4.dp))
-                        Text("Leave")
-                    }
-                }
+
+                VideoCallState.Connecting ->
+                    StatusRow("Đang kết nối server…", spinning = true)
+
+                VideoCallState.WaitingForCallee ->
+                    WaitingForCalleePanel(roomId = state.roomId, onCancel = viewModel::cancelCall)
+
+                is VideoCallState.Calling ->
+                    CallingPanel(calleeName = cs.calleeName, onCancel = viewModel::cancelCall)
+
+                is VideoCallState.Incoming ->
+                    IncomingPanel(
+                        callerName = cs.callerName,
+                        onAccept = ::requestAccept,
+                        onReject = { viewModel.rejectCall("declined") },
+                    )
+
+                is VideoCallState.PeerReady ->
+                    StatusRow(
+                        "${cs.peerName} • ${if (cs.initiator) "Đang gửi offer…" else "Đang chờ offer…"}",
+                        spinning = true,
+                    )
+
+                VideoCallState.InCall ->
+                    InCallPanel(onLeave = viewModel::leave)
+
+                is VideoCallState.Rejected ->
+                    OutcomePanel(
+                        title = "Cuộc gọi bị từ chối",
+                        subtitle = cs.reason,
+                        color = ColorRed,
+                        onDismiss = viewModel::dismiss,
+                    )
+
+                VideoCallState.Cancelled ->
+                    OutcomePanel(
+                        title = "Cuộc gọi đã bị huỷ",
+                        subtitle = null,
+                        color = ColorYellow,
+                        onDismiss = viewModel::dismiss,
+                    )
+
+                VideoCallState.NoAnswer ->
+                    OutcomePanel(
+                        title = "Không có người trả lời",
+                        subtitle = "Hết thời gian chờ",
+                        color = ColorYellow,
+                        onDismiss = viewModel::dismiss,
+                    )
+
+                is VideoCallState.Busy ->
+                    OutcomePanel(
+                        title = "Phòng đang bận",
+                        subtitle = cs.reason,
+                        color = ColorRed,
+                        onDismiss = viewModel::dismiss,
+                    )
+
+                is VideoCallState.Error ->
+                    OutcomePanel(
+                        title = "Lỗi",
+                        subtitle = cs.message,
+                        color = ColorRed,
+                        onDismiss = viewModel::dismiss,
+                    )
             }
 
             // ── Signal log ───────────────────────────────────────────────────
@@ -286,6 +271,186 @@ fun VideoScreen(
     }
 }
 
+// ── Idle (role choice) ────────────────────────────────────────────────────────
+
+@Composable
+private fun IdlePanel(
+    serverUrl: String,
+    roomId: String,
+    onUrlChange: (String) -> Unit,
+    onRoomChange: (String) -> Unit,
+    onStartCall: () -> Unit,
+    onWaitForCall: () -> Unit,
+) {
+    Surface(tonalElevation = 2.dp, shape = MaterialTheme.shapes.medium) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            OutlinedTextField(
+                value = serverUrl,
+                onValueChange = onUrlChange,
+                label = { Text("Server URL") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            OutlinedTextField(
+                value = roomId,
+                onValueChange = onRoomChange,
+                label = { Text("Room ID") },
+                placeholder = { Text("vd: room1") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = onStartCall,
+                    enabled = roomId.isNotBlank(),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Icon(Icons.Default.Call, null); Spacer(Modifier.width(8.dp)); Text("Gọi")
+                }
+                OutlinedButton(
+                    onClick = onWaitForCall,
+                    enabled = roomId.isNotBlank(),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Icon(Icons.Default.Phone, null); Spacer(Modifier.width(8.dp)); Text("Chờ cuộc gọi")
+                }
+            }
+        }
+    }
+}
+
+// ── Caller waiting / calling ──────────────────────────────────────────────────
+
+@Composable
+private fun WaitingForCalleePanel(roomId: String, onCancel: () -> Unit) {
+    Surface(tonalElevation = 2.dp, shape = MaterialTheme.shapes.medium) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Icon(Icons.Default.HourglassTop, null, tint = ColorYellow)
+            Text(
+                "Đang chờ \"$roomId\" tham gia phòng…",
+                modifier = Modifier.weight(1f),
+            )
+            OutlinedButton(onClick = onCancel) { Text("Huỷ") }
+        }
+    }
+}
+
+@Composable
+private fun CallingPanel(calleeName: String, onCancel: () -> Unit) {
+    Surface(tonalElevation = 2.dp, shape = MaterialTheme.shapes.medium) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            CircularProgressIndicator(strokeWidth = 2.dp, color = ColorYellow, modifier = Modifier.size(20.dp))
+            Text("Đang đổ chuông $calleeName…", modifier = Modifier.weight(1f))
+            Button(onClick = onCancel, colors = ButtonDefaults.buttonColors(containerColor = ColorRed)) {
+                Icon(Icons.Default.CallEnd, null); Spacer(Modifier.width(4.dp)); Text("Huỷ")
+            }
+        }
+    }
+}
+
+// ── Callee incoming ───────────────────────────────────────────────────────────
+
+@Composable
+private fun IncomingPanel(callerName: String, onAccept: () -> Unit, onReject: () -> Unit) {
+    Surface(
+        color = MaterialTheme.colorScheme.primaryContainer,
+        shape = MaterialTheme.shapes.medium,
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text("📞 Cuộc gọi đến", style = MaterialTheme.typography.labelMedium)
+            Text(callerName, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+
+            Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+                FilledIconButton(
+                    onClick = onReject,
+                    colors = IconButtonDefaults.filledIconButtonColors(containerColor = ColorRed),
+                    modifier = Modifier.size(56.dp),
+                ) {
+                    Icon(Icons.Default.CallEnd, "Từ chối", tint = Color.White)
+                }
+                FilledIconButton(
+                    onClick = onAccept,
+                    colors = IconButtonDefaults.filledIconButtonColors(containerColor = ColorGreen),
+                    modifier = Modifier.size(56.dp),
+                ) {
+                    Icon(Icons.Default.Call, "Nghe", tint = Color.White)
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(40.dp)) {
+                Text("Từ chối", style = MaterialTheme.typography.labelSmall)
+                Text("Nghe", style = MaterialTheme.typography.labelSmall)
+            }
+        }
+    }
+}
+
+// ── In-call ───────────────────────────────────────────────────────────────────
+
+@Composable
+private fun InCallPanel(onLeave: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text("Đang trong cuộc gọi", color = ColorGreen, modifier = Modifier.weight(1f))
+        Button(onClick = onLeave, colors = ButtonDefaults.buttonColors(containerColor = ColorRed)) {
+            Icon(Icons.Default.CallEnd, null); Spacer(Modifier.width(4.dp)); Text("Kết thúc")
+        }
+    }
+}
+
+// ── Terminal outcomes ─────────────────────────────────────────────────────────
+
+@Composable
+private fun OutcomePanel(title: String, subtitle: String?, color: Color, onDismiss: () -> Unit) {
+    Surface(tonalElevation = 2.dp, shape = MaterialTheme.shapes.medium) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(title, color = color, fontWeight = FontWeight.SemiBold)
+                if (!subtitle.isNullOrBlank()) {
+                    Text(subtitle, style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            OutlinedButton(onClick = onDismiss) { Text("Đóng") }
+        }
+    }
+}
+
+// ── Generic status row ────────────────────────────────────────────────────────
+
+@Composable
+private fun StatusRow(text: String, spinning: Boolean) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        modifier = Modifier.fillMaxWidth().padding(8.dp),
+    ) {
+        if (spinning) CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(20.dp))
+        Text(text, style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
 // ── Sub-composables ───────────────────────────────────────────────────────────
 
 @Composable
@@ -302,10 +467,7 @@ private fun VideoPane(
         contentAlignment = Alignment.Center,
     ) {
         if (track != null) {
-            AndroidView(
-                factory = { renderer },
-                modifier = Modifier.fillMaxSize(),
-            )
+            AndroidView(factory = { renderer }, modifier = Modifier.fillMaxSize())
         } else {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Icon(Icons.Default.Videocam, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -318,13 +480,18 @@ private fun VideoPane(
 @Composable
 private fun CallStateLabel(state: VideoCallState) {
     val (text, color) = when (state) {
-        VideoCallState.Idle -> "● Not in a room" to Color.Gray
-        VideoCallState.Connecting -> "● Connecting…" to ColorYellow
-        VideoCallState.WaitingForPeer -> "● Waiting for peer" to ColorYellow
-        is VideoCallState.PeerReady -> "● Peer connected" to ColorGreen
-        VideoCallState.InCall -> "● In call" to ColorGreen
-        VideoCallState.Busy -> "● Room full" to ColorRed
-        is VideoCallState.Error -> "● Error: ${state.message}" to ColorRed
+        VideoCallState.Idle -> "● Sẵn sàng" to Color.Gray
+        VideoCallState.Connecting -> "● Đang kết nối…" to ColorYellow
+        VideoCallState.WaitingForCallee -> "● Chờ người nghe" to ColorYellow
+        is VideoCallState.Calling -> "● Đang đổ chuông" to ColorYellow
+        is VideoCallState.Incoming -> "● Cuộc gọi đến" to ColorGreen
+        is VideoCallState.PeerReady -> "● Peer kết nối" to ColorGreen
+        VideoCallState.InCall -> "● Đang gọi" to ColorGreen
+        is VideoCallState.Rejected -> "● Bị từ chối" to ColorRed
+        VideoCallState.Cancelled -> "● Đã huỷ" to ColorYellow
+        VideoCallState.NoAnswer -> "● Không trả lời" to ColorYellow
+        is VideoCallState.Busy -> "● Bận" to ColorRed
+        is VideoCallState.Error -> "● Lỗi: ${state.message}" to ColorRed
     }
     Text(text, style = MaterialTheme.typography.labelSmall, color = color)
 }

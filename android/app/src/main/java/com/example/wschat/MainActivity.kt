@@ -20,10 +20,14 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -47,6 +51,8 @@ private const val ROUTE_ORDERS = "orders"
 private const val ROUTE_ORDERS_WITH_SYMBOL = "orders?symbol={symbol}"
 private const val ROUTE_VIDEO = "video"
 
+private const val ACTION_OPEN_INCOMING_CALL = "com.example.wschat.OPEN_INCOMING_CALL"
+
 private val bottomNavRoutes = setOf(ROUTE_STOCK, ROUTE_CHAT, ROUTE_ORDERS, ROUTE_VIDEO)
 
 @AndroidEntryPoint
@@ -54,9 +60,13 @@ class MainActivity : ComponentActivity() {
 
     @Inject lateinit var tokenStore: TokenStore
 
+    /** Set by onCreate / onNewIntent so Compose can react to "open incoming call". */
+    private var pendingIncomingCallTrigger by mutableStateOf(0)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        if (intent.shouldOpenIncomingCall()) pendingIncomingCallTrigger++
         setContent {
             WSChatTheme {
                 val navController = rememberNavController()
@@ -65,6 +75,13 @@ class MainActivity : ComponentActivity() {
                 val context = LocalContext.current
 
                 val startDest = remember { if (tokenStore.isLoggedIn()) ROUTE_STOCK else ROUTE_LOGIN }
+
+                // Whenever an "incoming call" intent fires, jump to the video screen.
+                LaunchedEffect(pendingIncomingCallTrigger) {
+                    if (pendingIncomingCallTrigger > 0 && tokenStore.isLoggedIn()) {
+                        navController.navigateToVideo()
+                    }
+                }
 
                 Scaffold(
                     bottomBar = {
@@ -158,6 +175,19 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.shouldOpenIncomingCall()) pendingIncomingCallTrigger++
+    }
+
+    private fun Intent.shouldOpenIncomingCall(): Boolean = action == ACTION_OPEN_INCOMING_CALL
+
+    private fun NavHostController.navigateToVideo() {
+        if (currentDestination?.route == ROUTE_VIDEO) return
+        navigate(ROUTE_VIDEO) { launchSingleTop = true }
     }
 }
 
